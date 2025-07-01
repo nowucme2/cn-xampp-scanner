@@ -54,7 +54,7 @@ def detect_http(ip):
                 r = requests.get(url, timeout=5, verify=False)
                 if r.status_code:
                     urls.append(url)
-                    break  # prefer HTTP first match
+                    break
             except:
                 continue
     return urls
@@ -132,7 +132,6 @@ def export_csv(results, path):
                     'X-Powered-By': powered
                 })
 
-
 def main():
     try:
         show_banner()
@@ -167,6 +166,7 @@ def main():
             for future in as_completed(future_to_target):
                 results.append(future.result())
 
+        # Write to JSON
         with open(json_path, 'w') as out_file:
             out_file.write("🔐 CN XAMPP Scanner Report\n")
             out_file.write(f"🕒 Date: {datetime.now()}\n")
@@ -175,7 +175,22 @@ def main():
                 out_file.write(json.dumps(r, indent=2) + "\n")
             out_file.write("="*60 + "\n")
 
+        # Write to CSV
         export_csv(results, csv_path)
+
+        # Final Summary on screen
+        print("\n" + "="*60)
+        print("📋 Summary of Findings:")
+        for r in results:
+            print(f"\n🖥️ Target: {r['target']}")
+            for f in r.get("findings", []):
+                print(f"  [+] Found: {f['url']} - Status: {f['status']} {'[DIR LISTING]' if f.get('directory_listing') else ''}")
+            if r.get("lfi"):
+                print("  [!!] LFI Detected")
+            if r.get("missing_security_headers"):
+                print("  [SEC] Missing Headers:", ", ".join(r["missing_security_headers"]))
+            fp = r.get("fingerprint", {})
+            print(f"  [FP] Server: {fp.get('server', 'Unknown')} | X-Powered-By: {fp.get('x_powered_by', 'Unknown')}")
 
         print(f"\n✅ JSON Results saved to: {json_path}")
         print(f"✅ CSV Report saved to: {csv_path}")
