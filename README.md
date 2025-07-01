@@ -13,3 +13,16 @@ This tool scans for exposed XAMPP services and performs a basic Local File Inclu
 
 ```bash
 pip3 install -r requirements.txt
+
+🚀 Run the Tool
+
+python3 scanner.py
+
+📥 Example targets.txt
+
+http://192.168.1.10
+http://example.com
+ 
+
+
+
