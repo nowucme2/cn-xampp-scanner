@@ -40,8 +40,10 @@ COMMON_PORTS = [80, 443, 8010, 8080, 8888]
 def port_open(ip, port):
     try:
         with socket.create_connection((ip, port), timeout=3):
+            print(f"[PORT OPEN] {ip}:{port}")
             return True
     except:
+        print(f"[PORT CLOSED] {ip}:{port}")
         return False
 
 def detect_http(ip):
@@ -77,6 +79,8 @@ def check_target(target):
                     entry["access"] = "forbidden"
                     result["findings"].append(entry)
                     print(f"[!] Forbidden {path} (might exist) -> {url}")
+                else:
+                    print(f"[-] {url} - Status {response.status_code}")
             except requests.RequestException:
                 print(f"[-] Could not connect to {url}")
 
@@ -94,17 +98,18 @@ def check_target(target):
             print(f"[-] Could not connect to LFI URL: {lfi_url}")
 
         # Security headers check
-        root_response = requests.get(target, headers=headers, timeout=5, verify=False)
-        missing_headers = [h for h in SEC_HEADERS if h not in root_response.headers]
-        if missing_headers:
-            result["missing_security_headers"] = missing_headers
-            print(f"[SEC] Missing headers at {target}: {', '.join(missing_headers)}")
+        try:
+            root_response = requests.get(target, headers=headers, timeout=5, verify=False)
+            missing_headers = [h for h in SEC_HEADERS if h not in root_response.headers]
+            if missing_headers:
+                result["missing_security_headers"] = missing_headers
+                print(f"[SEC] Missing headers at {target}: {', '.join(missing_headers)}")
 
-        # Fingerprinting
-        server = root_response.headers.get("Server", "Unknown")
-        powered = root_response.headers.get("X-Powered-By", "Unknown")
-        result["fingerprint"] = {"server": server, "x_powered_by": powered}
-
+            server = root_response.headers.get("Server", "Unknown")
+            powered = root_response.headers.get("X-Powered-By", "Unknown")
+            result["fingerprint"] = {"server": server, "x_powered_by": powered}
+        except:
+            print(f"[-] Couldn't retrieve headers for {target}")
     except Exception as e:
         print(f"[ERROR] Unexpected error while scanning {target}: {e}")
     return result
@@ -120,6 +125,17 @@ def export_csv(results, path):
             missing = ','.join(r.get('missing_security_headers', []))
             server = r.get('fingerprint', {}).get('server', '')
             powered = r.get('fingerprint', {}).get('x_powered_by', '')
+            if not r.get("findings"):
+                writer.writerow({
+                    'Target': target,
+                    'URL': '',
+                    'Status': '',
+                    'Directory Listing': '',
+                    'LFI': lfi,
+                    'Missing Headers': missing,
+                    'Server': server,
+                    'X-Powered-By': powered
+                })
             for f in r.get('findings', []):
                 writer.writerow({
                     'Target': target,
@@ -154,46 +170,58 @@ def main():
         targets = []
         for t in raw_targets:
             ip = t.split(":")[0].replace("http://", "").replace("https://", "").strip("/")
+            print(f"\n[*] Checking {ip} on common XAMPP ports...")
             urls = detect_http(ip)
             if not urls:
-                print(f"[-] No accessible HTTP/S service found on {ip} in common ports.")
+                print(f"[!] No accessible HTTP/S service found on {ip}")
+                for port in COMMON_PORTS:
+                    print(f"    ⛔ Tried {ip}:{port} (no service)")
             else:
+                print(f"[+] Detected HTTP(S) services on {ip}:")
+                for u in urls:
+                    print(f"    🌐 {u}")
                 targets.extend(urls)
 
-        results = []
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            future_to_target = {executor.submit(check_target, t): t for t in targets}
-            for future in as_completed(future_to_target):
-                results.append(future.result())
+        if not targets:
+            print("\n[!] No targets to scan. Exiting.")
+        else:
+            results = []
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                future_to_target = {executor.submit(check_target, t): t for t in targets}
+                for future in as_completed(future_to_target):
+                    results.append(future.result())
 
-        # Write to JSON
-        with open(json_path, 'w') as out_file:
-            out_file.write("🔐 CN XAMPP Scanner Report\n")
-            out_file.write(f"🕒 Date: {datetime.now()}\n")
-            out_file.write("="*60 + "\n")
+            # Write to JSON
+            with open(json_path, 'w') as out_file:
+                out_file.write("🔐 CN XAMPP Scanner Report\n")
+                out_file.write(f"🕒 Date: {datetime.now()}\n")
+                out_file.write("="*60 + "\n")
+                if not results:
+                    out_file.write("No reachable services found.\n")
+                else:
+                    for r in results:
+                        out_file.write(json.dumps(r, indent=2) + "\n")
+                out_file.write("="*60 + "\n")
+
+            # Write to CSV
+            export_csv(results, csv_path)
+
+            # Final Summary
+            print("\n" + "="*60)
+            print("📋 Summary of Findings:")
             for r in results:
-                out_file.write(json.dumps(r, indent=2) + "\n")
-            out_file.write("="*60 + "\n")
+                print(f"\n🖥️ Target: {r['target']}")
+                for f in r.get("findings", []):
+                    print(f"  [+] Found: {f['url']} - Status: {f['status']} {'[DIR LISTING]' if f.get('directory_listing') else ''}")
+                if r.get("lfi"):
+                    print("  [!!] LFI Detected")
+                if r.get("missing_security_headers"):
+                    print("  [SEC] Missing Headers:", ", ".join(r["missing_security_headers"]))
+                fp = r.get("fingerprint", {})
+                print(f"  [FP] Server: {fp.get('server', 'Unknown')} | X-Powered-By: {fp.get('x_powered_by', 'Unknown')}")
 
-        # Write to CSV
-        export_csv(results, csv_path)
-
-        # Final Summary on screen
-        print("\n" + "="*60)
-        print("📋 Summary of Findings:")
-        for r in results:
-            print(f"\n🖥️ Target: {r['target']}")
-            for f in r.get("findings", []):
-                print(f"  [+] Found: {f['url']} - Status: {f['status']} {'[DIR LISTING]' if f.get('directory_listing') else ''}")
-            if r.get("lfi"):
-                print("  [!!] LFI Detected")
-            if r.get("missing_security_headers"):
-                print("  [SEC] Missing Headers:", ", ".join(r["missing_security_headers"]))
-            fp = r.get("fingerprint", {})
-            print(f"  [FP] Server: {fp.get('server', 'Unknown')} | X-Powered-By: {fp.get('x_powered_by', 'Unknown')}")
-
-        print(f"\n✅ JSON Results saved to: {json_path}")
-        print(f"✅ CSV Report saved to: {csv_path}")
+            print(f"\n✅ JSON Results saved to: {json_path}")
+            print(f"✅ CSV Report saved to: {csv_path}")
 
     except KeyboardInterrupt:
         print("\n[!] Scan interrupted by user. Exiting.")
